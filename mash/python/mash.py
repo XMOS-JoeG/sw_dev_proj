@@ -20,6 +20,7 @@ ACCUM_WIDTH = 20
 # Static input as a float
 desired_mod_input = 0.51
 
+
 print("Desired Modulator input: " + str(desired_mod_input))
 # Map 0.0 to 1.0 input to 0 to (2^ACCUM_WIDTH)-1 max input. clip at (2^ACCUM_WIDTH)-1.
 dc_input_static = round(numpy.clip(((2**ACCUM_WIDTH) * desired_mod_input), 0, ((2**ACCUM_WIDTH)-1)))
@@ -43,6 +44,7 @@ print("Quantised Actual Modulator input is " + str(dc_input_static) + "/" + str(
 dc_input = []
 for i in range(sample_count):
   dc_input.append(dc_input_static)
+  
 
 # Now define the modulator itself
 
@@ -95,9 +97,9 @@ delta_sigma_out = MASH_1_1_1(dc_input)
 print("Average of output is " + str(sum(delta_sigma_out) / len(delta_sigma_out)))
 
 #Print the output
-print("SampleNo,SampleValue")
-for i in range(sample_count):
-  print(str(i) + "," + str(delta_sigma_out[i]))
+# print("SampleNo,SampleValue")
+# for i in range(sample_count):
+  # print(str(i) + "," + str(delta_sigma_out[i]))
 
 filename = "output_" + str(ACCUM_WIDTH) + "bit_" + hex(dc_input_static) + ".csv"
 with open(filename, 'w', encoding='UTF8') as f:
