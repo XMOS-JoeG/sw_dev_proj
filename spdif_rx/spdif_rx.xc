@@ -193,7 +193,7 @@ void spdif_rx_48(streaming chanend c, buffered in port:32 p)
         if (pre_check > 10) // Last three bits of old subframe and first "bit" of preamble.
         {
             outword = xor4(outword, (outword << 1), 0xFFFFFFFF, 0x00000000); // This achieves the xor decode plus inverting the output in one step.
-            //outword = outword << 1; // can do in another thread
+            outword <<= 1;
             c <: outword;
             
             // Receive and decode the next input word here because we need to use a different mask to capture the preamble detail.
@@ -228,7 +228,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p)
         if (pre_check > 10) // Last three bits of old subframe and first "bit" of preamble.
         {
             outword = xor4(outword, (outword << 1), 0xFFFFFFFF, 0x00000000); // This achieves the xor decode plus inverting the output in one step.
-            //outword = outword << 1; // can do in another thread
+            outword <<= 1;
             c <: outword;
             
             // Receive and decode the next input word here because we need to use a different mask to capture the preamble detail.
@@ -301,7 +301,7 @@ void spdif_receive_sample_jeg(streaming chanend c)
         c :> tmp;
         tmr :> t;
         times[i] = t;
-        outwords[i] = tmp << 1; // Do the left shift by 1 here if we don't have time in other thread.
+        outwords[i] = tmp;
     }
     
     // Manually parse the output words to look for errors etc.
