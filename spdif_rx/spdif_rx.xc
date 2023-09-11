@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 // Required
-on tile[0]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1N; // mcaudio opt in // 1O is opt, 1N is coax
+on tile[0]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O; // mcaudio opt in // 1O is opt, 1N is coax
 on tile[0]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
 
 // Optional if required for board setup.
@@ -35,19 +35,6 @@ void board_setup(void)
     delay_milliseconds(10);
 
     /////////////////////////////
-}
-
-void printintBits(int word, int size)
-{
-    unsigned mask = 1 << (size-1);
-    for (int i = 0; i<size; i++)
-    {
-      if ((word & mask) == mask)
-        printf("1");
-      else
-        printf("0");
-      mask >>= 1;
-    }
 }
 
 static inline int cls(int idata)
@@ -123,7 +110,7 @@ static inline void spdif_rx_8UI_STD_441(buffered in port:32 p, unsigned &t, unsi
     unsigned crc;
     unsigned ref_tran;
     // lookup table. index can be max of 32 so need 33 element array.
-    const unsigned error_lookup[33] = {38,37,36,35,34,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
+    const unsigned error_lookup[33] = {36,36,36,35,35,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
     // 44.1k standard
     const unsigned unscramble_0x08080202_0xC[16] = {
     0x70000000, 0xC0000000, 0xA0000000, 0x10000000,
@@ -151,7 +138,7 @@ static inline void spdif_rx_8UI_PRE_441(buffered in port:32 p, unsigned &t, unsi
     unsigned crc;
     unsigned ref_tran;
     // lookup table. index can be max of 32 so need 33 element array.
-    const unsigned error_lookup[33] = {38,37,36,35,34,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
+    const unsigned error_lookup[33] = {36,36,36,35,35,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
     // 44.1k preamble
     const unsigned unscramble_0x08080220_0xC[16] = {
     0x30000000, 0xC0000000, 0xA0000000, 0x50000000,
@@ -305,16 +292,16 @@ void spdif_receive_sample_jeg(streaming chanend c)
     }
     
     // Manually parse the output words to look for errors etc.
-    //unsigned errors = 0;
-    //unsigned ok = 0;
-    //unsigned block_count = 0;
-    //unsigned right, left;
+    unsigned errors = 0;
+    unsigned ok = 0;
+    unsigned block_count = 0;
+    unsigned right, left;
 
-    for(int i=0; i<200; i++)
+    for(int i=0; i<20000; i++)
     {
         if (i > 0)
         {   
-/*             unsigned pre = outwords[i] & 0xF;
+            unsigned pre = outwords[i] & 0xF;
             if ((pre == 0x8) | (pre == 0xA)) // Z preamble
                 block_count++;
             if ((pre == 0x2) | (pre == 0x0)) // Y preamble (right)
@@ -325,22 +312,22 @@ void spdif_receive_sample_jeg(streaming chanend c)
                 if (right != left)
                 {
                     errors++;
-                    //printf("Error left 0x%08X, right 0x%08X, i %d, time %d\n", left, right, i, t_diff);
-                    printf("Error left 0x%08X, right 0x%08X, i %d, time %d\n", outwords[i-1], outwords[i], i, t_diff);
+                    printf("Error left 0x%08X, right 0x%08X, i %d, time %d\n", left, right, i, t_diff);
+                    //printf("Error left 0x%08X, right 0x%08X, i %d, time %d\n", outwords[i-1], outwords[i], i, t_diff);
                 }
                 else
                 {
                     ok++;
                     //printf("OK    left 0x%08X, right 0x%08X, i %d, time %d\n", left, right, i, t_diff);
-                    printf("OK    left 0x%08X, right 0x%08X, i %d, time %d\n", outwords[i-1], outwords[i], i, t_diff);
+                    //printf("OK    left 0x%08X, right 0x%08X, i %d, time %d\n", outwords[i-1], outwords[i], i, t_diff);
                 }
-            } */
-            int t_diff = times[i] - times[i-1];
-            printf("outword 0x%08X, i %d, t_diff %d\n", outwords[i], i, t_diff);
+            }
+/*             int t_diff = times[i] - times[i-1];
+            printf("outword 0x%08X, i %d, t_diff %d\n", outwords[i], i, t_diff); */
         }
     }
     
-    //printf("Error count %d, ok count %d, block_count %d\n", errors, ok, block_count);
+    printf("Error count %d, ok count %d, block_count %d\n", errors, ok, block_count);
 
     exit(1);
   
@@ -369,7 +356,6 @@ int main(void) {
             board_setup();
             spdif_rx(c, p_spdif_rx, clk_spdif_rx);
         }
-        //on tile[0]: handle_samples(c);
         on tile[0]: spdif_receive_sample_jeg(c);
         on tile[0]: dummy_thread(0);
         on tile[0]: dummy_thread(1);
