@@ -7,15 +7,14 @@
 #include <stdint.h>
 #include <print.h>
 
-// Required
-on tile[0]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O; // mcaudio opt in // 1O is opt, 1N is coax
-on tile[0]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
+on tile[TILE]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O;   // xcore.ai mcaudio 1O is optical, 1N is coax. xc200 1O is optical, 1P is coax
+on tile[TILE]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
 
 // Optional if required for board setup.
-on tile[0]: out             port    p_ctrl        = XS1_PORT_8D;
+on tile[TILE]: out             port    p_ctrl        = XS1_PORT_8D;
 
 // Test port
-on tile[0]: out             port    p_test        = XS1_PORT_1A;
+on tile[TILE]: out             port    p_test        = XS1_PORT_1A;
 
 void exit(int);
 
@@ -44,8 +43,11 @@ void board_setup(void)
 static inline int cls(int idata)
 {
     int x;
+    #if __XS3A__
     asm volatile("cls %0, %1" : "=r"(x)  : "r"(idata)); // xs3 on.
-    //x = (clz(idata) + clz(~idata)); // For xs2.
+    #else
+    x = (clz(idata) + clz(~idata)); // For xs2.
+    #endif
     return x;
 }
 
@@ -56,14 +58,17 @@ static inline int xor4(int idata1, int idata2, int idata3, int idata4)
     return x;
 }
 
-// Lookup tables for port times. index can be max of 32 so need 33 element array.
-const unsigned error_lookup_441[33] = {36,36,36,35,35,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
-const unsigned error_lookup_48[33]  = {35,34,33,32,32,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39};
+// Lookup tables for port time adder based on where the reference transition was.                                                                                           
+// Index can be max of 32 so need 33 element array.
+// Index 0 is never used.
+const unsigned error_lookup_441[33] = {0,36,36,35,35,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
+const unsigned error_lookup_48[33]  = {0,33,33,32,32,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39,39};
 
 #pragma unsafe arrays
-static inline void spdif_rx_8UI_48(buffered in port:32 p, unsigned &t, unsigned &sample, unsigned &ref_tran, unsigned &outword)
+static inline void spdif_rx_8UI_48(buffered in port:32 p, unsigned &t, unsigned &sample, unsigned &outword)
 {
     unsigned crc;
+    unsigned ref_tran;
 
     // 48k standard
     const unsigned unscramble_0x08080404_0xB[16] = {
@@ -77,7 +82,8 @@ static inline void spdif_rx_8UI_48(buffered in port:32 p, unsigned &t, unsigned 
     ref_tran = cls(sample<<9); // Expected value is 2 Possible values are 1 to 32.
     t += error_lookup_48[ref_tran]; // Lookup next port time based off where current transition was.
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-    sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 20 and 21.
+    if (ref_tran > 2)
+      sample <<= 1;
     crc = sample & 0x08080404;
     crc32(crc, 0xF, 0xB);
     outword >>= 4;
@@ -102,9 +108,8 @@ static inline void spdif_rx_8UI_441(buffered in port:32 p, unsigned &t, unsigned
     ref_tran = cls(sample<<9); // Expected value is 2 Possible values are 1 to 32.
     t += error_lookup_441[ref_tran]; // Lookup next port time based off where current transition was.
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-    if (ref_tran > 3)
-        ref_tran = 3;
-    sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 20 and 21.
+    if (ref_tran > 2)
+      sample <<= 1;
     crc = sample & 0x08080202;
     crc32(crc, 0xF, 0xC);
     outword >>= 4;
@@ -113,36 +118,37 @@ static inline void spdif_rx_8UI_441(buffered in port:32 p, unsigned &t, unsigned
 
 void spdif_rx_48(streaming chanend c, buffered in port:32 p, unsigned &t)
 {
+    unsigned pre_check = 0;
     unsigned sample;
     unsigned outword = 0;
-    unsigned ref_tran = 0;
     unsigned z_pre_sample = 0;
     
     // Set the initial port time
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
 
     // Now receive data
-    while(ref_tran < 16)
+    while(pre_check < 16)
     {
-        spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-        if (cls(sample) > 10) // Last three bits of old subframe and first "bit" of preamble.
+        spdif_rx_8UI_48(p, t, sample, outword);
+        pre_check = cls(sample);
+        if (pre_check > 9) // Last three bits of old subframe and first "bit" of preamble.
         {
             outword = xor4(outword, (outword << 1), 0xFFFFFFFF, z_pre_sample); // This achieves the xor decode plus inverting the output in one step.
             outword <<= 1;
             c <: outword;
 
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
             z_pre_sample = sample;
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-            if (cls(z_pre_sample<<11) > 10)
+            spdif_rx_8UI_48(p, t, sample, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
+            if (cls(z_pre_sample<<11) > 9)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
-            spdif_rx_8UI_48(p, t, sample, ref_tran, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
+            spdif_rx_8UI_48(p, t, sample, outword);
         }
     }
 }
@@ -162,7 +168,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p, unsigned &t)
     {
         spdif_rx_8UI_441(p, t, sample, outword);
         pre_check = cls(sample);
-        if (pre_check > 10) // Last three bits of old subframe and first "bit" of preamble.
+        if (pre_check > 9) // Last three bits of old subframe and first "bit" of preamble.
         {
             outword = xor4(outword, (outword << 1), 0xFFFFFFFF, z_pre_sample); // This achieves the xor decode plus inverting the output in one step.
             outword <<= 1;
@@ -173,7 +179,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p, unsigned &t)
             spdif_rx_8UI_441(p, t, sample, outword);
             spdif_rx_8UI_441(p, t, sample, outword);
             spdif_rx_8UI_441(p, t, sample, outword);
-            if (cls(z_pre_sample<<11) > 11)
+            if (cls(z_pre_sample<<11) > 10)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
@@ -206,21 +212,23 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
     for(int i=0; i<20000;i++)
     {
         asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
-        ref_tran = cls(sample<<10); // Expected value is 2 Possible values are 1 to 32.
+        ref_tran = cls(sample<<9); // Expected value is 2 Possible values are 1 to 32.
         t += error_lookup_441[ref_tran]; // Lookup next port time based off where current transition was.
         asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
         if (ref_tran > 16)
             break;
-        sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 19 and 20.
-        if (cls(sample) > 11)
+        if (ref_tran > 2)
+            sample <<= 1;
+        if (cls(sample) > 9)
         {
             asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
             ref_tran = cls(sample<<10);
             t += error_lookup_441[ref_tran]; // Lookup next port time based off where current transition was.
             asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-            sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 19 and 20.
+            if (ref_tran > 2)
+                sample <<= 1;
             //look for a z preamble
-            if (cls(sample<<12) > 11) // Z preamble
+            if (cls(sample<<11) > 10) // Z preamble
             {
                 tmr :> tmp;
                 if (t_block == 0)
@@ -281,16 +289,18 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
         asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
         if (ref_tran > 16)
             break;
-        sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 20 and 21.
-        if (cls(sample) > 10)
+        if (ref_tran > 2)
+            sample <<= 1;
+        if (cls(sample) > 9)
         {
             asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
             ref_tran = cls(sample<<9);
             t += error_lookup_48[ref_tran]; // Lookup next port time based off where current transition was.
             asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-            sample <<= (ref_tran - 2); // shift the sample to make the transition exactly between bits 20 and 21.
+            if (ref_tran > 2)
+                sample <<= 1;
             //look for a z preamble
-            if (cls(sample<<11) > 10) // Z preamble
+            if (cls(sample<<11) > 9) // Z preamble
             {
                 tmr :> tmp;
                 if (t_block == 0)
@@ -326,7 +336,6 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
 
 void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk)
 {
-
     // Configure spdif rx port to be clocked from spdif_rx clock defined below.
     configure_in_port(p, clk);
     
@@ -403,8 +412,8 @@ void spdif_receive_sample(streaming chanend c)
     unsigned tmp;
     timer tmr;
     int t;
-    unsigned outwords[50000] = {0};
-    unsigned times[50000] = {0};
+    unsigned outwords[20000] = {0};
+    unsigned times[20000] = {0};
     
 /*     while(1)
     {
@@ -414,7 +423,7 @@ void spdif_receive_sample(streaming chanend c)
         p_test <: 1;
     } */
     
-    for(int i = 0; i<50000;i++)
+    for(int i = 0; i<20000;i++)
     {
         c :> tmp;
         tmr :> t;
@@ -427,67 +436,50 @@ void spdif_receive_sample(streaming chanend c)
     unsigned errors = 0;
     unsigned ok = 0;
     unsigned block_count = 0;
-    unsigned sample_count = 0;
-    for(int i=0; i<50000; i++)
+    for(int i=0; i<20000; i++)
     {
         unsigned pre = outwords[i] & 0xC;
-        unsigned sample = (outwords[i] & ~0xF) << 4;
-        int t_diff = times[i] - times[i-1];
+        //int t_diff = times[i] - times[i-1];
         
         if (pre == 0x8) // Z preamble
         {
             block_count++;
-            sample_count = 0;
             printf("Block Start!, i = %d\n", i);
-            unsigned expected = sine_table1[sample_count % 96] << 8;
-            if (sample != expected)
+            unsigned expected = 0;
+            for(int j=0; j<192;j++)
             {
-                errors++;
-                printf("Error sample 0x%08X, expected 0x%08X, i %d, samp_count %d, time %d\n", sample, expected, i, sample_count, t_diff);
-            }
-            else
-            {
-                ok++;
-            }
-        }
-        
-        if (block_count > 0)
-        {
-            if (pre == 0xC) // X preamble
-            {
-                unsigned expected = sine_table1[sample_count % 96] << 8;
-                if (sample != expected)
+                unsigned index = j/2;
+                if (j==0)
+                {
+                    expected = (sine_table1[index % 96] << 4) | 0x8;
+                }
+                else if (j%2 == 0)
+                {
+                    expected = (sine_table1[index % 96] << 4) | 0xC;
+                }
+                else if (j%2 == 1)
+                {
+                    expected = (sine_table2[index % 96] << 4) | 0x0;
+                }
+                
+                if (i+j == 20000)
+                    break;
+                unsigned checkword = outwords[i+j] & 0x0FFFFFFC;
+                if (checkword != expected)
                 {
                     errors++;
-                    printf("Error sample 0x%08X, expected 0x%08X, i %d, samp_count %d, time %d\n", sample, expected, i, sample_count, t_diff);
+                    printf("Error checkword 0x%08X, expected 0x%08X, i %d, j %d\n", checkword, expected, i, j);
                 }
                 else
                 {
                     ok++;
+                    //printf("OK    checkword 0x%08X, expected 0x%08X, i %d, j %d\n", checkword, expected, i, j);
                 }
+                
             }
-            else if (pre == 0x0) // Y preamble (right)
-            {
-                unsigned expected = sine_table2[sample_count % 96] << 8;
-                if (sample != expected)
-                {
-                    errors++;
-                    printf("Error sample 0x%08X, expected 0x%08X, i %d, samp_count %d, time %d\n", sample, expected, i, sample_count, t_diff);
-                }
-                else
-                {
-                    ok++;
-                }
-                sample_count++;
-            }
+            i+=192;
         }
- 
-/*         int t_diff = 0;
-        if (i>0)
-            t_diff = times[i] - times[i-1];*/
-        //printf("outword 0x%08X, i %d, t_diff %d\n", outwords[i], i, t_diff);
     }
-    
     printf("Error count %d, ok count %d, block_count %d\n", errors, ok, block_count);
 
     while(1);
@@ -497,7 +489,6 @@ void spdif_receive_sample(streaming chanend c)
 void dummy_thread(int thread)
 {
     unsigned i=0;
-    set_core_fast_mode_on();
     
     while(1)
     {
@@ -513,17 +504,20 @@ int main(void) {
     streaming chan c;
     par
     {
-        on tile[0]: {
+        on tile[TILE]:
+        {
+            #ifndef XC200
             board_setup();
+            #endif
             spdif_rx(c, p_spdif_rx, clk_spdif_rx);
         }
-        on tile[0]: spdif_receive_sample(c);
-        on tile[0]: dummy_thread(0);
-        on tile[0]: dummy_thread(1);
-        on tile[0]: dummy_thread(2);
-        on tile[0]: dummy_thread(3);
-        on tile[0]: dummy_thread(4);
-        on tile[0]: dummy_thread(5);
+        on tile[TILE]: spdif_receive_sample(c);
+        on tile[TILE]: dummy_thread(0);
+        on tile[TILE]: dummy_thread(1);
+        on tile[TILE]: dummy_thread(2);
+        on tile[TILE]: dummy_thread(3);
+        on tile[TILE]: dummy_thread(4);
+        on tile[TILE]: dummy_thread(5);
     }
     return 0;
 }
