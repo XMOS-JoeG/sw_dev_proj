@@ -4,11 +4,11 @@
 #include <xclib.h>
 
 // Required
-on tile[0]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O; // SPDIF input port
-on tile[0]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
+on tile[TILE]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O; // SPDIF input port // mcaudio opt in // 1O is opt, 1N is coax
+on tile[TILE]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
 
 // Optional if required for board setup.
-on tile[0]: out             port    p_ctrl        = XS1_PORT_8D;
+on tile[TILE]: out             port    p_ctrl        = XS1_PORT_8D;
 
 void exit(int);
 
@@ -28,27 +28,13 @@ void board_setup(void)
     /////////////////////////////
 }
 
-// Set sampling clock divide value from 800MHz core clock. This program assumes 200MHz sampling (5ns resolution).
-// 4  = 100MHz
-// 3  = 133MHz
-// 2  = 200MHz
-// 1  = 400MHz
-# define CLK_DIVIDE 1
-
+#define CORE_CLOCK_MHZ 500
+#define CLK_DIVIDE 1
 // Define how many 32 bit samples to collect for analysis
-# define SAMPLES 10000
-
-// Port SET PAD CTRL Control Word definition
-// Bit - Meaning
-// 23 - Enable schmitt trigger when set to 1.
-// 22 - Output slew rate limiting enabled when set to 1. No use here, leave at 0.
-// [21:20] - Sets output drive strength - 00 - 2mA, 01 - 4mA, 10 - 8mA, 11 - 12mA. Irrelevant here, leave as default 4mA.
-// [19:18] - Not used.
-// 17 - REN - Receiver enable. Must be set to 1 to enable receiver. (default).
-// 16 - Not used.
-// [15:0] - Mode Bits - 0x0006 - This defines a SETPADCTRL write
+#define SAMPLES 20000
 
 #define PORT_PAD_CTL_4mA_SCHMITT   0x00920006
+
 
 void printintBits(int word)
 {
@@ -74,7 +60,7 @@ void spdif_rx_analyse(void)
     // Start the clock block running.
     start_clock(clk_spdif_rx);
 
-    // Configure the pad if required (used for testing)
+    // Configure the pad if required (used for testing), xcore.ai only
     // Uncomment the following line to enable the schmitt trigger on the input pad.
     // asm volatile ("setc res[%0], %1" :: "r" (p_spdif_rx), "r" (PORT_PAD_CTL_4mA_SCHMITT));
     // Uncomment the following line to turn on the input pad pulldown.
@@ -86,7 +72,14 @@ void spdif_rx_analyse(void)
     delay_milliseconds(1000);
     
     printf("S/PDIF signal quality analyser.\n");
-    printf("Sampling at %dMHz\n", (800/(CLK_DIVIDE*2)));
+    
+    float core_clock_ns = 1000/CORE_CLOCK_MHZ;
+    
+    unsigned sample_rate_MHz = CORE_CLOCK_MHZ/(CLK_DIVIDE*2);
+    float sample_time_ns = (core_clock_ns * 2 * CLK_DIVIDE);
+    printf("sample time = %fns\n", sample_time_ns); 
+    
+    printf("Sampling at %dMHz\n", sample_rate_MHz);
     
     unsigned samples[SAMPLES];
     
@@ -128,7 +121,7 @@ void spdif_rx_analyse(void)
     unsigned cur_value = samples[0] & 1; // record the value of the first pulse (LSB of samples[0])
     unsigned cur_sample;
     unsigned last_tran = 0;
-    unsigned pulse_lengths[4*SAMPLES];
+    char pulse_lengths[4*SAMPLES];
     unsigned pulse_count = 0;
     unsigned t = 0;
     unsigned cur_bit;
@@ -222,7 +215,6 @@ void spdif_rx_analyse(void)
     }
     
     //printf("histogram: max_count = %d, max_pulse = %d, min pulse = %d\n", max_count, max_pulse, min_pulse);
-    float sample_time_ns = (2.5 * CLK_DIVIDE);
 
     // Need to scale the histogram here
     // Say we want max characters printed to be 100 
@@ -342,10 +334,12 @@ void spdif_rx_analyse(void)
     // Look for preambles. All start with a long pulse, then disregard the next say eight pulses (some may be long)
     // So look for a long pulse, wait for eight pulses to make sure we're in the middle of a word. Then look for long pulse, make this time t0. ignore next eight pulses and look for long again.
     // A subframe might be 4 + (28*2) = 60 pulses long if transmitting all 1s.
-    // Lets measure the time for one hundred subframes, this could be 60*100 = 6000 pulses.
+    // Lets measure the time for 256 subframes, this could be 60*256 = 15360 pulses.
     unsigned first_long = 0;
     unsigned pre_count = 0;
     unsigned i_start, i_end;
+    
+    //printf("pulse_count = %d\n", pulse_count);
     
     for(int i=0; i<pulse_count; i++)
     {
@@ -359,7 +353,7 @@ void spdif_rx_analyse(void)
             }
             else
             {
-                if (pre_count == 100)
+                if (pre_count == 256)
                 {
                     i_end = i;
                     break;
@@ -375,22 +369,24 @@ void spdif_rx_analyse(void)
     }
     
     // Sum up all the pulse times to get the total time
-    unsigned t_pre100 = 0;
+    unsigned t_pre256 = 0;
     for(int i=i_start; i<i_end; i++)
     {
-        t_pre100 = t_pre100 + pulse_lengths[i];
+        t_pre256 = t_pre256 + pulse_lengths[i];
     }
     
     float time_1ui_fl;
     float calc_sample_rate_khz;
     
-    // 100 preambles means 100 subframes so (100*64UI per subframe) = 6400UI
-    // Total time is t_pre100 * sample time
-    // So final is (t_pre100 * sample time)/6400
-    time_1ui_fl = (float) t_pre100*sample_time_ns/6400;
+    printf("t_pre256 = %d\n", t_pre256);
+    
+    // 256 preambles means 256 subframes so (256*64UI per subframe) = 16384UI
+    // Total time is t_pre256 * sample time
+    // So final is (t_pre256 * sample time)/16384
+    time_1ui_fl = (float) (t_pre256*sample_time_ns)/16384;
     calc_sample_rate_khz = 1000000/(time_1ui_fl*128);
     
-    //printf("i_start = %d, i_end = %d, time_1ui_fl = %.3fns, calc_sample_rate = %.3fkHz\n", i_start, i_end, time_1ui_fl, calc_sample_rate_khz);
+    printf("i_start = %d, i_end = %d, time_1ui_fl = %fns, calc_sample_rate = %.3fkHz\n", i_start, i_end, time_1ui_fl, calc_sample_rate_khz);
     printf("Measured sample rate = %.3fkHz\n", calc_sample_rate_khz);
 
     unsigned pos_len_tot[3] = {0}; // Positive length totals
@@ -623,13 +619,15 @@ void spdif_rx_analyse(void)
     float edge_tie[4*SAMPLES] = {0};
     float min_tie = 0;
     float max_tie = 0;
+    
+    unsigned sample_time_ns_int = 4;
 
     printf("Analysing time interval error of zero crossings.\n");
-    for(int i=i_start; i<i_end; i++)
+    for(int i=i_start; i<(i_start+500); i++)
     {
         unsigned pulse_len = pulse_lengths[i];
         //edge_time = edge_time + (float) (pulse_len * sample_time_ns);
-        edge_time = edge_time + pulse_len;
+        edge_time += pulse_len;
         
         if (pulse_len < thresh[0]) // short 1UI
         {
@@ -645,20 +643,21 @@ void spdif_rx_analyse(void)
         }
         ideal_edge_time_int = ideal_edge_time_int + pulse_len_quant;
         ideal_edge_time = (ideal_edge_time_int * time_1ui_fl);
-        edge_tie[i] = ((float)edge_time * sample_time_ns) - ideal_edge_time;
+        edge_tie[i] = (float)(edge_time * sample_time_ns_int) - ideal_edge_time;
         if (edge_tie[i] > max_tie)
         {
             max_tie = edge_tie[i];
             //printf("edge_tie %5.2f, min %5.2f, max %5.2f, i %d\n", edge_tie[i], min_tie, max_tie, i);
-            //printf("ideal_edge_time %f, edge_time %d\n", ideal_edge_time, edge_time);
+            //printf("ideal_edge_time %f, edge_time %d\n", ideal_edge_time, (edge_time * sample_time_ns_int));
         }
         if (edge_tie[i] < min_tie)
         {
             min_tie = edge_tie[i];
             //printf("edge_tie %5.2f, min %5.2f, max %5.2f, i %d\n", edge_tie[i], min_tie, max_tie, i);
-            //printf("ideal_edge_time %f, edge_time %d\n", ideal_edge_time, edge_time);
+            //printf("ideal_edge_time %f, edge_time %d\n", ideal_edge_time, (edge_time * sample_time_ns_int));
         }
-        //printf("edge_tie %5.2f, min %5.2f, max %5.2f\n", edge_tie[i], min_tie, max_tie);
+        unsigned edge_time_ns = edge_time * sample_time_ns_int;
+        //printf("i %3d, pulse_len %3d, edge_time %3d, edge_time_ns %5d, len_quant %d, ideal_edge_time %f, edge_tie %5.2f, min %5.2f, max %5.2f\n", i, pulse_len, edge_time, edge_time_ns, pulse_len_quant, ideal_edge_time, edge_tie[i], min_tie, max_tie);
     }
     printf("Zero crossing TIE (ns): min %.2f, max %.2f, pk-pk %.2f\n", min_tie, max_tie, (max_tie - min_tie));
     
@@ -669,9 +668,11 @@ void spdif_rx_analyse(void)
 int main(void) {
     par
     {
-        on tile[0]:
+        on tile[TILE]:
         {
+            #ifndef XC200
             board_setup();
+            #endif
             spdif_rx_analyse();
         }
     }
