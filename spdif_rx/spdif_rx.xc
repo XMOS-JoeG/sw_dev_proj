@@ -321,49 +321,78 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
 
     int t_block_targ;
     int t_block_err;
-    // samplefreq  clockdiv  target (192/sr)
+    // samplefreq  clockdiv  target (192 frames/sample-rate)
     // 48000       2         4ms
     // 96000       1         2ms
     // 192000      0         1ms
     t_block_targ = 100000 << clock_div;
     t_block_err = t_block - t_block_targ;
 
-    t+=65; // Add an 8UI time adder to ensure we have enough instruction time before next IN.
+    t+=65; // Add an 8UI*2 time adder to ensure we have enough instruction time before next IN.
 
+    // ~1000ppm at 48000Hz
     if ((t_block_err > -400) && (t_block_err < 400))
         return 0;
     else
         return 1;
 }
 
-void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk)
+void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sample_freq_estimate)
 {
+    int clock_mod = sample_freq_estimate % 44100;
+    int clock_div = 2;
+
+    if(sample_freq_estimate > 96000)
+    {
+       clock_div = 0;
+    }
+    else if (sample_freq_estimate > 48000)
+    {
+       clock_div = 1;
+    }
+
     // Configure spdif rx port to be clocked from spdif_rx clock defined below.
     configure_in_port(p, clk);
 
     while(1)
     {
-        for(int clock_div = 0; clock_div < 3; clock_div++) // Loop over different sampling freqs (100/50/25MHz)
-        {
-            // Stop clock so we can reconfigure it
-            stop_clock(clk);
-            // Set the desired clock div
-            configure_clock_ref(clk, clock_div);
-            // Start the clock block running. Port timer will be reset here.
-            start_clock(clk);
 
-            // We now test to see if the 44.1 base rate decode will work, if not we switch to 48.
-            unsigned t;
-            if (initial_sync_441(p, t, clock_div) == 0)
+        // Stop clock so we can reconfigure it
+        stop_clock(clk);
+        // Set the desired clock div
+        configure_clock_ref(clk, clock_div);
+        // Start the clock block running. Port timer will be reset here.
+        start_clock(clk);
+
+        // We now test to see if the 44.1 base rate decode will work, if not we switch to 48.
+        unsigned t;
+
+        for(int i = 0; i < 2; i++)
+        {
+            if(clock_mod)
             {
-                spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
-                printf("Exit %dHz Mode\n", (176400>>clock_div));
+                if (initial_sync_441(p, t, clock_div) == 0)
+                {
+                    spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
+                    printf("Exit %dHz Mode\n", (176400>>clock_div));
+                }
             }
-            else if (initial_sync_48(p, t, clock_div) == 0)
+            else
             {
-                spdif_rx_48(c, p, t);
-                printf("Exit %dHz Mode\n", (192000>>clock_div));
+                if (initial_sync_48(p, t, clock_div) == 0)
+                {
+                    spdif_rx_48(c, p, t);
+                    printf("Exit %dHz Mode\n", (192000>>clock_div));
+                }
+
             }
+            clock_mod = !clock_mod;
+        }
+
+        clock_div++;
+        if(clock_div == 3)
+        {
+            clock_div = 0;
         }
     }
 }
@@ -509,7 +538,7 @@ int main(void) {
             #ifndef XC200
             board_setup();
             #endif
-            spdif_rx(c, p_spdif_rx, clk_spdif_rx);
+            spdif_rx(c, p_spdif_rx, clk_spdif_rx, 192000);
         }
         on tile[TILE]: spdif_receive_sample(c);
         on tile[TILE]: dummy_thread(0);
