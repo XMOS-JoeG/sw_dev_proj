@@ -329,7 +329,7 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
     t_block_err = t_block - t_block_targ;
 
     t+=65; // Add an 8UI time adder to ensure we have enough instruction time before next IN.
-    //printf("t_block = %d\n", t_block);
+
     if ((t_block_err > -400) && (t_block_err < 400))
         return 0;
     else
@@ -345,8 +345,6 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk)
     {
         for(int clock_div = 0; clock_div < 3; clock_div++) // Loop over different sampling freqs (100/50/25MHz)
         {
-            //printf("clock_div = %d\n", clock_div);
-
             // Stop clock so we can reconfigure it
             stop_clock(clk);
             // Set the desired clock div
