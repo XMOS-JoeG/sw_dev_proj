@@ -1,4 +1,4 @@
-// Test program for spdif_rx 
+// Test program for spdif_rx
 #include <xs1.h>
 #include <stdio.h>
 #include <xclib.h>
@@ -27,13 +27,13 @@ void xscope_user_init() {
 void board_setup(void)
 {
     //////// BOARD SETUP FOR XU316 MC AUDIO ////////
-    
+
     set_port_drive_high(p_ctrl);
-    
+
     // Drive control port to turn on 3V3.
     // Bits set to low will be high-z, pulled down.
     p_ctrl <: 0xA0;
-    
+
     // Wait for power supplies to be up and stable.
     delay_milliseconds(10);
 
@@ -43,11 +43,11 @@ void board_setup(void)
 static inline int cls(int idata)
 {
     int x;
-    #if __XS3A__
-    asm volatile("cls %0, %1" : "=r"(x)  : "r"(idata)); // xs3 on.
-    #else
-    x = (clz(idata) + clz(~idata)); // For xs2.
-    #endif
+#if __XS3A__
+    asm volatile("cls %0, %1" : "=r"(x)  : "r"(idata));
+#else
+    x = (clz(idata) + clz(~idata));
+#endif
     return x;
 }
 
@@ -58,7 +58,7 @@ static inline int xor4(int idata1, int idata2, int idata3, int idata4)
     return x;
 }
 
-// Lookup tables for port time adder based on where the reference transition was.                                                                                           
+// Lookup tables for port time adder based on where the reference transition was.
 // Index can be max of 32 so need 33 element array.
 // Index 0 is never used.
 const unsigned error_lookup_441[33] = {0,36,36,35,35,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42,42};
@@ -122,8 +122,9 @@ void spdif_rx_48(streaming chanend c, buffered in port:32 p, unsigned &t)
     unsigned sample;
     unsigned outword = 0;
     unsigned z_pre_sample = 0;
-    
+
     // Set the initial port time
+    // Note, this is inline asm since xc can only express a timed input/output
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
 
     // Now receive data
@@ -159,8 +160,9 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p, unsigned &t)
     unsigned sample;
     unsigned outword = 0;
     unsigned z_pre_sample = 0;
-    
+
     // Set the initial port time
+    // Note, this is inline asm since xc can only express a timed input/output
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
 
     // Now receive data
@@ -173,7 +175,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p, unsigned &t)
             outword = xor4(outword, (outword << 1), 0xFFFFFFFF, z_pre_sample); // This achieves the xor decode plus inverting the output in one step.
             outword <<= 1;
             c <: outword;
-            
+
             spdif_rx_8UI_441(p, t, sample, outword);
             z_pre_sample = sample;
             spdif_rx_8UI_441(p, t, sample, outword);
@@ -203,12 +205,12 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
     int t_block = 0;
     timer tmr;
     unsigned tmp;
-    
+
     // Read the port counter and add a bit.
     p :> void @ t; // read port counter
     t+= 100;
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-    
+
     for(int i=0; i<20000;i++)
     {
         asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
@@ -244,7 +246,7 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
             }
         }
     }
-    
+
     int t_block_targ;
     int t_block_err;
     // samplefreq  clockdiv  target (192/sr)
@@ -253,9 +255,9 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
     // 176400      0         1.088ms
     t_block_targ = 108843 << clock_div;
     t_block_err = t_block - t_block_targ;
-    
+
     t+=70; // Add an 8UI*2 time adder to ensure we have enough instruction time before next IN.
-    //printf("t_block = %d\n", t_block);
+
     if ((t_block_err > -435) && (t_block_err < 435))
         return 0;
     else
@@ -275,12 +277,12 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
     int t_block = 0;
     timer tmr;
     unsigned tmp;
-    
+
     // Read the port counter and add a bit.
     p :> void @ t; // read port counter
     t+= 100;
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
-    
+
     for(int i=0; i<20000;i++)
     {
         asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
@@ -316,7 +318,7 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
             }
         }
     }
-    
+
     int t_block_targ;
     int t_block_err;
     // samplefreq  clockdiv  target (192/sr)
@@ -325,7 +327,7 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
     // 192000      0         1ms
     t_block_targ = 100000 << clock_div;
     t_block_err = t_block - t_block_targ;
-    
+
     t+=65; // Add an 8UI time adder to ensure we have enough instruction time before next IN.
     //printf("t_block = %d\n", t_block);
     if ((t_block_err > -400) && (t_block_err < 400))
@@ -338,20 +340,20 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk)
 {
     // Configure spdif rx port to be clocked from spdif_rx clock defined below.
     configure_in_port(p, clk);
-    
+
     while(1)
     {
         for(int clock_div = 0; clock_div < 3; clock_div++) // Loop over different sampling freqs (100/50/25MHz)
         {
             //printf("clock_div = %d\n", clock_div);
-        
+
             // Stop clock so we can reconfigure it
             stop_clock(clk);
             // Set the desired clock div
             configure_clock_ref(clk, clock_div);
             // Start the clock block running. Port timer will be reset here.
             start_clock(clk);
-            
+
             // We now test to see if the 44.1 base rate decode will work, if not we switch to 48.
             unsigned t;
             if (initial_sync_441(p, t, clock_div) == 0)
@@ -389,8 +391,8 @@ const int32_t sine_table1[96] =
 
 // Two cycles of full scale 24 bit sine wave in 96 samples.
 // This will produce 1kHz signal at Fs = 48kHz, 2kHz at 96kHz and 4kHz at 192kHz.
-const int32_t sine_table2[96] = 
-{ 
+const int32_t sine_table2[96] =
+{
     0x000000,0x10B515,0x2120FB,0x30FBC5,0x3FFFFF,0x4DEBE4,0x5A8279,0x658C99,
     0x6ED9EB,0x7641AE,0x7BA374,0x7EE7A9,0x7FFFFF,0x7EE7A9,0x7BA374,0x7641AE,
     0x6ED9EB,0x658C99,0x5A8279,0x4DEBE4,0x3FFFFF,0x30FBC5,0x2120FB,0x10B515,
@@ -414,7 +416,7 @@ void spdif_receive_sample(streaming chanend c)
     int t;
     unsigned outwords[20000] = {0};
     unsigned times[20000] = {0};
-    
+
 /*     while(1)
     {
         c :> tmp;
@@ -422,7 +424,7 @@ void spdif_receive_sample(streaming chanend c)
         c :> tmp;
         p_test <: 1;
     } */
-    
+
     for(int i = 0; i<20000;i++)
     {
         c :> tmp;
@@ -430,7 +432,7 @@ void spdif_receive_sample(streaming chanend c)
         times[i] = t;
         outwords[i] = tmp;
     }
-    
+
     // Manually parse the output words to look for errors etc.
     // Based on known TX samples from spdif tx program.
     unsigned errors = 0;
@@ -440,7 +442,7 @@ void spdif_receive_sample(streaming chanend c)
     {
         unsigned pre = outwords[i] & 0xC;
         //int t_diff = times[i] - times[i-1];
-        
+
         if (pre == 0x8) // Z preamble
         {
             block_count++;
@@ -461,7 +463,7 @@ void spdif_receive_sample(streaming chanend c)
                 {
                     expected = (sine_table2[index % 96] << 4) | 0x0;
                 }
-                
+
                 if (i+j == 20000)
                     break;
                 unsigned checkword = outwords[i+j] & 0x0FFFFFFC;
@@ -475,7 +477,7 @@ void spdif_receive_sample(streaming chanend c)
                     ok++;
                     //printf("OK    checkword 0x%08X, expected 0x%08X, i %d, j %d\n", checkword, expected, i, j);
                 }
-                
+
             }
             i+=192;
         }
@@ -483,13 +485,13 @@ void spdif_receive_sample(streaming chanend c)
     printf("Error count %d, ok count %d, block_count %d\n", errors, ok, block_count);
 
     while(1);
-  
+
 }
 
 void dummy_thread(int thread)
 {
     unsigned i=0;
-    
+
     while(1)
     {
         i+=4;
