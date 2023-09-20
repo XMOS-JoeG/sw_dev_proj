@@ -356,7 +356,6 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sa
 
     while(1)
     {
-
         // Stop clock so we can reconfigure it
         stop_clock(clk);
         // Set the desired clock div
@@ -371,20 +370,19 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sa
         {
             if(clock_mod)
             {
-                if (initial_sync_441(p, t, clock_div) == 0)
-                {
-                    spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
-                    printf("Exit %dHz Mode\n", (176400>>clock_div));
-                }
-            }
-            else
-            {
                 if (initial_sync_48(p, t, clock_div) == 0)
                 {
                     spdif_rx_48(c, p, t);
                     printf("Exit %dHz Mode\n", (192000>>clock_div));
                 }
-
+            }
+            else
+            {
+                if (initial_sync_441(p, t, clock_div) == 0)
+                {
+                    spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
+                    printf("Exit %dHz Mode\n", (176400>>clock_div));
+                }
             }
             clock_mod = !clock_mod;
         }
