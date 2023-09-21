@@ -4,7 +4,8 @@
 #include <xclib.h>
 
 // Required
-on tile[TILE]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O; // SPDIF input port // mcaudio opt in // 1O is opt, 1N is coax
+// SPDIF input port. xcore.ai mcaudio OPT: 1O, COAX: 1N. xc-200 mcaudio OPT 1O, COAX 1P
+on tile[TILE]: in  buffered    port:32 p_spdif_rx    = XS1_PORT_1O;
 on tile[TILE]: clock                   clk_spdif_rx  = XS1_CLKBLK_1;
 
 // Optional if required for board setup.
@@ -182,13 +183,14 @@ void spdif_rx_analyse(void)
     }
     
     // Build a histogram of pulse lengths
-    unsigned pulse_histogram[128] = {0}; // count of how many pulses occurred for each pulse length. Pulse length is index into this array.
+    // Max pulse length for 44.1 is 3UI ~=532ns. @ 2.5ns fastest sampling this is 213. So use array of size 256.
+    unsigned pulse_histogram[256] = {0}; // count of how many pulses occurred for each pulse length. Pulse length is index into this array.
 
     unsigned hist_count = 0;
     unsigned min_pulse = 1000; // Minimum pulse length found
     unsigned max_pulse = 0; // Maximum pulse length found
     unsigned max_count = 0; // Maximum count of pulses in any bin
-    for(int j=0; j<128; j++)
+    for(int j=0; j<256; j++)
     {
         for(int i=0; i<pulse_count; i++)
         {
@@ -330,11 +332,14 @@ void spdif_rx_analyse(void)
     
     // Indexing: short = 0, medium = 1, long = 2
     
-    // Find the sample rate
+    // Find the sample rate.
+    // We are collecting 20000 32 bit samples @ 4ns per bit. total time = 4ns * 32 * 20000 = 2.56ms.
+    // @ 44.1kHz (slowest), subframe/preamble rate is @ 88.2kHz => T = 11.34us.
+    // So in 2.56ms we have (2560/11.34) = 225 preambles.
     // Look for preambles. All start with a long pulse, then disregard the next say eight pulses (some may be long)
     // So look for a long pulse, wait for eight pulses to make sure we're in the middle of a word. Then look for long pulse, make this time t0. ignore next eight pulses and look for long again.
     // A subframe might be 4 + (28*2) = 60 pulses long if transmitting all 1s.
-    // Lets measure the time for 256 subframes, this could be 60*256 = 15360 pulses.
+    // Lets measure the time for 200 subframes, this could be 60*200 = 12000 pulses.
     unsigned first_long = 0;
     unsigned pre_count = 0;
     unsigned i_start, i_end;
@@ -353,7 +358,7 @@ void spdif_rx_analyse(void)
             }
             else
             {
-                if (pre_count == 256)
+                if (pre_count == 200)
                 {
                     i_end = i;
                     break;
@@ -369,24 +374,24 @@ void spdif_rx_analyse(void)
     }
     
     // Sum up all the pulse times to get the total time
-    unsigned t_pre256 = 0;
+    unsigned t_pre200 = 0;
     for(int i=i_start; i<i_end; i++)
     {
-        t_pre256 = t_pre256 + pulse_lengths[i];
+        t_pre200 = t_pre200 + pulse_lengths[i];
     }
     
     float time_1ui_fl;
     float calc_sample_rate_khz;
     
-    printf("t_pre256 = %d\n", t_pre256);
+    //printf("t_pre200 = %d\n", t_pre200);
     
-    // 256 preambles means 256 subframes so (256*64UI per subframe) = 16384UI
-    // Total time is t_pre256 * sample time
-    // So final is (t_pre256 * sample time)/16384
-    time_1ui_fl = (float) (t_pre256*sample_time_ns)/16384;
+    // 200 preambles means 200 subframes so (200*64UI per subframe) = 12800UI
+    // Total time is t_pre200 * sample time
+    // So final is (t_pre200 * sample time)/12800
+    time_1ui_fl = (float) (t_pre200*sample_time_ns)/12800;
     calc_sample_rate_khz = 1000000/(time_1ui_fl*128);
     
-    printf("i_start = %d, i_end = %d, time_1ui_fl = %fns, calc_sample_rate = %.3fkHz\n", i_start, i_end, time_1ui_fl, calc_sample_rate_khz);
+    //printf("i_start = %d, i_end = %d, time_1ui_fl = %fns, calc_sample_rate = %.3fkHz\n", i_start, i_end, time_1ui_fl, calc_sample_rate_khz);
     printf("Measured sample rate = %.3fkHz\n", calc_sample_rate_khz);
 
     unsigned pos_len_tot[3] = {0}; // Positive length totals
@@ -527,9 +532,9 @@ void spdif_rx_analyse(void)
         pos_duty_cycle[i] = (pos_len_avg_flt_ns[i]/(pos_len_avg_flt_ns[i] + neg_len_avg_flt_ns[i]))*100;
     }
     
-    printf("Short pulse duty cycle  = %.3f%%, pulse_width difference = %.2fns\n", pos_duty_cycle[0], (pos_len_avg_flt_ns[0] - neg_len_avg_flt_ns[0]) );
-    printf("Medium pulse duty cycle = %.3f%%, pulse_width difference = %.2fns\n", pos_duty_cycle[1], (pos_len_avg_flt_ns[1] - neg_len_avg_flt_ns[1]) );
-    printf("Long pulse duty cycle   = %.3f%%, pulse_width difference = %.2fns\n", pos_duty_cycle[2], (pos_len_avg_flt_ns[2] - neg_len_avg_flt_ns[2]) );
+    printf("Short pulse positive duty cycle  = %.3f%%, pulse_length difference (pos - neg) = %.2fns\n", pos_duty_cycle[0], (pos_len_avg_flt_ns[0] - neg_len_avg_flt_ns[0]) );
+    printf("Medium pulse positive duty cycle = %.3f%%, pulse_length difference (pos - neg) = %.2fns\n", pos_duty_cycle[1], (pos_len_avg_flt_ns[1] - neg_len_avg_flt_ns[1]) );
+    printf("Long pulse positive duty cycle   = %.3f%%, pulse_length difference (pos - neg) = %.2fns\n", pos_duty_cycle[2], (pos_len_avg_flt_ns[2] - neg_len_avg_flt_ns[2]) );
     
     // So actually duty cycle distortion isn't the whole problem.
     // Intersymbol interference is also a problem.
@@ -661,7 +666,7 @@ void spdif_rx_analyse(void)
     }
     printf("Zero crossing TIE (ns): min %.2f, max %.2f, pk-pk %.2f\n", min_tie, max_tie, (max_tie - min_tie));
     
-    //while(1);
+    while(1);
 
 }
 
