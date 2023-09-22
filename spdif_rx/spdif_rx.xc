@@ -194,7 +194,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p, unsigned &t)
 
 // This initial sync locks the DLL onto stream (inc. Z preamble) and checks if it is OK for decode.
 #pragma unsafe arrays
-int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
+int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned sample_rate)
 {
     // Initial lock to start of preambles and check our sampling freq is correct.
     // We will very quickly lock into one of two positions in the stream (where data transitions every 8UI)
@@ -205,6 +205,16 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
     int t_block = 0;
     timer tmr;
     unsigned tmp;
+    
+    // Calculate target time for a 192 frame channel status block
+    // samplefreq  clockdiv  target (192/sr)
+    // 44100       2         4.354ms
+    // 88200       1         2.177ms
+    // 176400      0         1.088ms
+    // target is (192/sample_rate)/10ns = (192*100000000)/sample_rate
+    int t_block_targ = (1920000000/sample_rate);
+    t_block_targ = t_block_targ*10;
+    int t_block_err_limit = t_block_targ/1000; // 1000ppm limit
 
     // Read the port counter and add a bit.
     p :> void @ t; // read port counter
@@ -224,7 +234,7 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
         if (cls(sample) > 9)
         {
             asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
-            ref_tran = cls(sample<<10);
+            ref_tran = cls(sample<<9);
             t += error_lookup_441[ref_tran]; // Lookup next port time based off where current transition was.
             asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
             if (ref_tran > 2)
@@ -247,18 +257,11 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
         }
     }
 
-    int t_block_targ;
-    int t_block_err;
-    // samplefreq  clockdiv  target (192/sr)
-    // 44100       2         4.354ms
-    // 88200       1         2.177ms
-    // 176400      0         1.088ms
-    t_block_targ = 108843 << clock_div;
-    t_block_err = t_block - t_block_targ;
+    int t_block_err = t_block - t_block_targ;
 
     t+=70; // Add an 8UI*2 time adder to ensure we have enough instruction time before next IN.
 
-    if ((t_block_err > -435) && (t_block_err < 435))
+    if ((t_block_err > -t_block_err_limit) && (t_block_err < t_block_err_limit))
         return 0;
     else
         return 1;
@@ -266,7 +269,7 @@ int initial_sync_441(buffered in port:32 p, unsigned &t, unsigned clock_div)
 
 // This initial sync locks the DLL onto stream (inc. Z preamble) and checks if it is OK for decode.
 #pragma unsafe arrays
-int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
+int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned sample_rate)
 {
     // Initial lock to start of preambles and check our sampling freq is correct.
     // We will very quickly lock into one of two positions in the stream (where data transitions every 8UI)
@@ -277,6 +280,16 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
     int t_block = 0;
     timer tmr;
     unsigned tmp;
+    
+    // Calculate target time for a 192 frame channel status block
+    // samplefreq  clockdiv  target (192 frames/sample-rate)
+    // 48000       2         4ms
+    // 96000       1         2ms
+    // 192000      0         1ms
+    // target is (192/sample_rate)/10ns = (192*100000000)/sample_rate
+    int t_block_targ = (1920000000/sample_rate);
+    t_block_targ = t_block_targ*10;
+    int t_block_err_limit = t_block_targ/1000; // 1000ppm limit
 
     // Read the port counter and add a bit.
     p :> void @ t; // read port counter
@@ -319,19 +332,11 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
         }
     }
 
-    int t_block_targ;
-    int t_block_err;
-    // samplefreq  clockdiv  target (192 frames/sample-rate)
-    // 48000       2         4ms
-    // 96000       1         2ms
-    // 192000      0         1ms
-    t_block_targ = 100000 << clock_div;
-    t_block_err = t_block - t_block_targ;
+    int t_block_err = t_block - t_block_targ;
 
     t+=65; // Add an 8UI*2 time adder to ensure we have enough instruction time before next IN.
 
-    // ~1000ppm at 48000Hz
-    if ((t_block_err > -400) && (t_block_err < 400))
+    if ((t_block_err > -t_block_err_limit) && (t_block_err < t_block_err_limit))
         return 0;
     else
         return 1;
@@ -339,23 +344,16 @@ int initial_sync_48(buffered in port:32 p, unsigned &t, unsigned clock_div)
 
 void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sample_freq_estimate)
 {
-    int clock_mod = sample_freq_estimate % 44100;
-    int clock_div = 2;
-
-    if(sample_freq_estimate > 96000)
-    {
-       clock_div = 0;
-    }
-    else if (sample_freq_estimate > 48000)
-    {
-       clock_div = 1;
-    }
+    unsigned sample_rate = sample_freq_estimate;
 
     // Configure spdif rx port to be clocked from spdif_rx clock defined below.
     configure_in_port(p, clk);
 
     while(1)
     {
+        // Determine 100MHz clock divider
+        unsigned clock_div = 96001/sample_rate;
+          
         // Stop clock so we can reconfigure it
         stop_clock(clk);
         // Set the desired clock div
@@ -363,34 +361,38 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sa
         // Start the clock block running. Port timer will be reset here.
         start_clock(clk);
 
-        // We now test to see if the 44.1 base rate decode will work, if not we switch to 48.
         unsigned t;
+        
+        printf("Trying %dHz Rx mode ...\n", sample_rate);
 
-        for(int i = 0; i < 2; i++)
+        if(sample_rate % 44100)
         {
-            if(clock_mod)
+            if (initial_sync_48(p, t, sample_rate) == 0)
             {
-                if (initial_sync_48(p, t, clock_div) == 0)
-                {
-                    spdif_rx_48(c, p, t);
-                    printf("Exit %dHz Mode\n", (192000>>clock_div));
-                }
+                spdif_rx_48(c, p, t);
+                printf("Exit %dHz Mode\n", sample_rate);
             }
-            else
-            {
-                if (initial_sync_441(p, t, clock_div) == 0)
-                {
-                    spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
-                    printf("Exit %dHz Mode\n", (176400>>clock_div));
-                }
-            }
-            clock_mod = !clock_mod;
         }
-
-        clock_div++;
-        if(clock_div == 3)
+        else
         {
-            clock_div = 0;
+            if (initial_sync_441(p, t, sample_rate) == 0)
+            {
+                spdif_rx_441(c, p, t);  // We pass in start time so that we start in sync.
+                printf("Exit %dHz Mode\n", sample_rate);
+            }
+        }
+        
+        // Get next sample rate from current sample rate.
+        switch(sample_rate)
+        {
+            case 32000:  sample_rate = 44100;  break;
+            case 44100:  sample_rate = 48000;  break;
+            case 48000:  sample_rate = 88200;  break;
+            case 88200:  sample_rate = 96000;  break;
+            case 96000:  sample_rate = 176400; break;
+            case 176400: sample_rate = 192000; break;
+            case 192000: sample_rate = 32000;  break;
+            default:     sample_rate = 48000;  break;
         }
     }
 }
@@ -463,6 +465,7 @@ void spdif_receive_sample(streaming chanend c)
     unsigned errors = 0;
     unsigned ok = 0;
     unsigned block_count = 0;
+    int i_last =0;
     for(int i=0; i<20000; i++)
     {
         unsigned pre = outwords[i] & 0xC;
@@ -471,7 +474,8 @@ void spdif_receive_sample(streaming chanend c)
         if (pre == 0x8) // Z preamble
         {
             block_count++;
-            printf("Block Start!, i = %d\n", i);
+            printf("Block Start!, sample_count = %d\n", (i-i_last));
+            i_last = i;
             unsigned expected = 0;
             for(int j=0; j<192;j++)
             {
