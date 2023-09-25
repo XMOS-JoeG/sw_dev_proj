@@ -149,7 +149,7 @@ void spdif_rx_48(streaming chanend c, buffered in port:32 p)
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
-            if (cls(z_pre_sample<<11) > 9)
+            if (cls(z_pre_sample<<11) > 10)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
@@ -189,7 +189,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p)
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
-            if (cls(z_pre_sample<<11) > 10)
+            if (cls(z_pre_sample<<11) > 11)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
@@ -235,7 +235,7 @@ void spdif_rx(streaming chanend c, buffered in port:32 p, clock clk, unsigned sa
         // Start the clock block running. Port timer will be reset here.
         start_clock(clk);
         
-        printf("Trying %dHz Rx mode ...\n", sample_rate);
+        //printf("Trying %dHz Rx mode ...\n", sample_rate);
 
         // Check our clock div value is correct
         if (check_clock_div(p) == 0)
@@ -316,7 +316,27 @@ void spdif_receive_sample(streaming chanend c)
         c :> tmp;
         p_test <: 1;
     } */
+    
+    // Check for a stream of alternating preambles before trying decode.
+    int alt_pre_count = 0;
+    while(alt_pre_count < 100)
+    {
+        c :> tmp;
+        if ((tmp & 0xC) == 0xC) // X
+        {
+            c :> tmp;
+            if ((tmp & 0xC) == 0x0) // Y
+                alt_pre_count++;
+            else
+                alt_pre_count = 0;
+        }
+        else
+        {
+            alt_pre_count = 0;
+        }
+    }
 
+    // Collecting samples
     for(int i = 0; i<20000;i++)
     {
         c :> tmp;
@@ -326,10 +346,10 @@ void spdif_receive_sample(streaming chanend c)
     }
     
 /*     int t_diff;
-    for(int i = 0; i<200;i++)
+    for(int i = 0; i<20;i++)
     {
         if (i == 0)
-            t_diff = times[i] - 0;
+            t_diff = times[i];
         else
             t_diff = times[i] - times[i-1];
         printf("outwords[%d] = 0x%08X, t_diff = %d\n", i, outwords[i], t_diff);
@@ -344,15 +364,24 @@ void spdif_receive_sample(streaming chanend c)
     for(int i=0; i<20000; i++)
     {
         unsigned pre = outwords[i] & 0xC;
-        //int t_diff = times[i] - times[i-1];
 
         if (pre == 0x8) // Z preamble
         {
+            if (i+384 >= 20000)
+                break;
+            printf("Block Start");
+            if (block_count == 0)
+                printf("\n");
+            else
+            {
+                printf(". Samples in last block = %d\n", (i-i_last));
+                if ((i-i_last) != 384)
+                  printf("Error - Block not 384 samples in length\n");
+            }
             block_count++;
-            printf("Block Start!, sample_count = %d\n", (i-i_last));
             i_last = i;
             unsigned expected = 0;
-            for(int j=0; j<192;j++)
+            for(int j=0; j<384;j++)
             {
                 unsigned index = j/2;
                 if (j==0)
@@ -368,8 +397,6 @@ void spdif_receive_sample(streaming chanend c)
                     expected = (sine_table2[index % 96] << 4) | 0x0;
                 }
 
-                if (i+j == 20000)
-                    break;
                 unsigned checkword = outwords[i+j] & 0x0FFFFFFC;
                 if (checkword != expected)
                 {
@@ -383,10 +410,10 @@ void spdif_receive_sample(streaming chanend c)
                 }
 
             }
-            i+=192;
         }
     }
-    printf("Error count %d, ok count %d, block_count %d\n", errors, ok, block_count);
+    printf("Checked %d channel status blocks of samples. Expected number of samples = %d.\n", block_count, (block_count*384));
+    printf("Error count %d, ok count %d\n", errors, ok);
 
     while(1);
 
@@ -414,6 +441,8 @@ int main(void) {
         {
             #ifndef XC200
             board_setup();
+            #else
+            delay_milliseconds(10);
             #endif
             spdif_rx(c, p_spdif_rx, clk_spdif_rx, 32000);
         }
