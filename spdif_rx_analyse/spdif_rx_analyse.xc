@@ -36,7 +36,6 @@ void board_setup(void)
 
 #define PORT_PAD_CTL_4mA_SCHMITT   0x00920006
 
-
 void printintBits(int word)
 {
     unsigned mask = 0x80000000;
@@ -73,6 +72,12 @@ void spdif_rx_analyse(void)
     delay_milliseconds(1000);
     
     printf("S/PDIF signal quality analyser.\n");
+
+    unsafe
+    {
+        unsigned portref = (unsigned) p_spdif_rx;
+        printf("Input port reference: 0x%X on tile[%d]\n", portref, TILE);
+    }
     
     float core_clock_ns = 1000/CORE_CLOCK_MHZ;
     
