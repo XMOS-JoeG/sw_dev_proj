@@ -71,11 +71,11 @@ static inline void spdif_rx_8UI_48(buffered in port:32 p, unsigned &t, unsigned 
     unsigned ref_tran;
 
     // 48k standard
-    const unsigned unscramble_0x08080404_0xB[16] = {
-    0xA0000000, 0x10000000, 0xE0000000, 0x50000000,
-    0x20000000, 0x90000000, 0x60000000, 0xD0000000,
-    0x70000000, 0xC0000000, 0x30000000, 0x80000000,
-    0xF0000000, 0x40000000, 0xB0000000, 0x00000000};
+    unsigned unscramble_0x04040404_0xF[16] = {
+    0x80000000, 0x90000000, 0xC0000000, 0xD0000000,
+    0x70000000, 0x60000000, 0x30000000, 0x20000000,
+    0xA0000000, 0xB0000000, 0xE0000000, 0xF0000000,
+    0x50000000, 0x40000000, 0x10000000, 0x00000000};
 
     // Now receive data
     asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
@@ -84,12 +84,10 @@ static inline void spdif_rx_8UI_48(buffered in port:32 p, unsigned &t, unsigned 
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
     if (ref_tran > 4)
       unlock_cnt++;
-    else if (ref_tran > 2)
-      sample <<= 1;
-    crc = sample & 0x08080404;
-    crc32(crc, 0xF, 0xB);
+    crc = sample & 0x04040404;
+    crc32(crc, 0xF, 0xF);
     outword >>= 4;
-    outword |= unscramble_0x08080404_0xB[crc];
+    outword |= unscramble_0x04040404_0xF[crc];
 }
 
 #pragma unsafe arrays
@@ -99,11 +97,11 @@ static inline void spdif_rx_8UI_441(buffered in port:32 p, unsigned &t, unsigned
     unsigned ref_tran;
 
     // 44.1k standard
-    const unsigned unscramble_0x08080202_0xC[16] = {
-    0x70000000, 0xC0000000, 0xA0000000, 0x10000000,
-    0x30000000, 0x80000000, 0xE0000000, 0x50000000,
-    0x20000000, 0x90000000, 0xF0000000, 0x40000000,
-    0x60000000, 0xD0000000, 0xB0000000, 0x00000000};
+    unsigned unscramble_0x08040201_0xF[16] = {
+    0xF0000000, 0x70000000, 0xB0000000, 0x30000000,
+    0xD0000000, 0x50000000, 0x90000000, 0x10000000,
+    0xE0000000, 0x60000000, 0xA0000000, 0x20000000,
+    0xC0000000, 0x40000000, 0x80000000, 0x00000000};
 
     // Now receive data
     asm volatile("in %0, res[%1]" : "=r"(sample)  : "r"(p));
@@ -112,12 +110,10 @@ static inline void spdif_rx_8UI_441(buffered in port:32 p, unsigned &t, unsigned
     asm volatile("setpt res[%0], %1"::"r"(p),"r"(t));
     if (ref_tran > 4)
       unlock_cnt++;
-    else if (ref_tran > 2)
-      sample <<= 1;
-    crc = sample & 0x08080202;
-    crc32(crc, 0xF, 0xC);
+    crc = sample & 0x08040201;
+    crc32(crc, 0xF, 0xF);
     outword >>= 4;
-    outword |= unscramble_0x08080202_0xC[crc];
+    outword |= unscramble_0x08040201_0xF[crc];
 }
 
 void spdif_rx_48(streaming chanend c, buffered in port:32 p)
@@ -149,7 +145,7 @@ void spdif_rx_48(streaming chanend c, buffered in port:32 p)
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_48(p, t, sample, outword, unlock_cnt);
-            if (cls(z_pre_sample<<11) > 10)
+            if (cls(z_pre_sample<<13) > 8)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
@@ -189,7 +185,7 @@ void spdif_rx_441(streaming chanend c, buffered in port:32 p)
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
             spdif_rx_8UI_441(p, t, sample, outword, unlock_cnt);
-            if (cls(z_pre_sample<<11) > 11)
+            if (cls(z_pre_sample<<13) > 9)
               z_pre_sample = 2;
             else
               z_pre_sample = 0;
