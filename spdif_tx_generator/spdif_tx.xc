@@ -32,7 +32,7 @@ on tile[0]: out             port    p_leds          = XS1_PORT_4F;
 #define SINE_TABLE_SIZE 96
 
 // One cycle of full scale 24 bit sine wave in 96 samples.
-// This will produce 500Hz signal at Fs = 48kHz, 1kHz at 96kHz and 2kHz at 192kHz.
+// This will produce 333Hz sine wave at Fs = 32kHz, 500Hz at Fs = 48kHz, 1kHz at 96kHz and 2kHz at 192kHz.
 const int32_t sine_table1[96] =
 {
     0x000000,0x085F21,0x10B515,0x18F8B8,0x2120FB,0x2924ED,0x30FBC5,0x389CEA,
@@ -50,7 +50,7 @@ const int32_t sine_table1[96] =
 };
 
 // Two cycles of full scale 24 bit sine wave in 96 samples.
-// This will produce 1kHz signal at Fs = 48kHz, 2kHz at 96kHz and 4kHz at 192kHz.
+// This will produce 666Hz sine wave at Fs = 32kHz, 1kHz at Fs = 48kHz, 2kHz at 96kHz and 4kHz at 192kHz.
 const int32_t sine_table2[96] = 
 { 
     0x000000,0x10B515,0x2120FB,0x30FBC5,0x3FFFFF,0x4DEBE4,0x5A8279,0x658C99,
@@ -103,8 +103,8 @@ void app_pll_setup(unsigned samp_rate)
 
 void generate_samples(chanend c_out, chanend c_in)
 {    
-    unsigned currentFreq = 44100;
-    unsigned mclk = MCLK_FREQUENCY_441;
+    unsigned currentFreq = 32000;
+    unsigned mclk = MCLK_FREQUENCY_48;
     int i = 0;
     app_pll_setup(currentFreq);
     spdif_tx_reconfigure_sample_rate(c_out, currentFreq, mclk);
@@ -125,23 +125,11 @@ void generate_samples(chanend c_out, chanend c_in)
                 // Generate a sine wave
                 int sample_l = sine_table1[i] << 8;
                 int sample_r = sine_table2[i] << 8; // Twice the frequency on right channel.
+                
                 i = (i + 1) % SINE_TABLE_SIZE;
                 spdif_tx_output(c_out, sample_l, sample_r);
                 break;
         }
-    }
-}
-
-void led_flash(unsigned flashcount)
-{
-    for(int i = 0; i < flashcount; i++)
-    {
-        // Light LEDs
-        p_leds <: 0xF;
-        delay_milliseconds(200);
-        // Turn LEDs off.
-        p_leds <: 0x0;
-        delay_milliseconds(200);
     }
 }
 
@@ -158,7 +146,8 @@ void board_setup_control(chanend c_out)
     // Wait for power supplies to be up and stable.
     delay_milliseconds(10);
     
-    unsigned currentFreq = 44100;
+    unsigned currentFreq = 32000;
+    p_leds <: 1;
     c_out <: currentFreq;
     unsigned tmp;
 
@@ -169,23 +158,40 @@ void board_setup_control(chanend c_out)
         tmp = ~tmp;
         if (tmp & 1) // Button 0 Pressed
         {
-            while (tmp & 0x01) {p_but :> tmp;}
+            while (tmp & 1) {p_but :> tmp; tmp = ~tmp;}
             printstr("Time to switch\n");
             switch(currentFreq)
             {
-                case 44100:  led_flash(2); currentFreq = 48000; break;
-                case 48000:  led_flash(3); currentFreq = 88200; break;
-                case 88200:  led_flash(4); currentFreq = 96000; break;
-                case 96000:  led_flash(5); currentFreq = 176400; break;
-                case 176400: led_flash(6); currentFreq = 192000; break;
-                case 192000: led_flash(1); currentFreq = 44100; break;
-                default:     led_flash(2); currentFreq = 48000; break;
+                case 32000:  currentFreq = 44100;  p_leds <: 2; break;
+                case 44100:  currentFreq = 48000;  p_leds <: 3; break;
+                case 48000:  currentFreq = 88200;  p_leds <: 4; break;
+                case 88200:  currentFreq = 96000;  p_leds <: 5; break;
+                case 96000:  currentFreq = 176400; p_leds <: 6; break;
+                case 176400: currentFreq = 192000; p_leds <: 7; break;
+                case 192000: currentFreq = 32000;  p_leds <: 1; break;
+                default:     currentFreq = 32000;  p_leds <: 1; break;
             }
             c_out <: currentFreq;
             delay_milliseconds(100);
         }
     }
 }
+
+// Dummy threads for performance testing.
+void dummy_thread(int thread)
+{
+    unsigned i=0;
+
+    while(1)
+    {
+        i+=4;
+        if (i == 0)
+        {
+            printf("thread %d\n", thread);
+        }
+    }
+}
+
 
 int main(void) {
     chan c_spdif;
@@ -199,6 +205,12 @@ int main(void) {
             spdif_tx(p_opt_tx, c_spdif);
         }
         on tile[1]: generate_samples(c_spdif, c_control);
+        on tile[1]: dummy_thread(0);
+        on tile[1]: dummy_thread(1);
+        on tile[1]: dummy_thread(2);
+        on tile[1]: dummy_thread(3);
+        on tile[1]: dummy_thread(4);
+        on tile[1]: dummy_thread(5);
     }
     return 0;
 }

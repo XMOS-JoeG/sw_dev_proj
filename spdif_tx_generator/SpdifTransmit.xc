@@ -43,11 +43,9 @@ static unsigned inline parity32(unsigned x)
 }
 
 // Three preambles
-// preamble[0] = 0x17 => "Z" - Block start & Sub-frame 1
-// preamble[1] = 0x47 => "X" - Sub-frame 1
-// preamble[2] = 0x27 => "Y" - Sub-frame 2
-
-char preamble[3] = {0x17, 0x47, 0x27};
+#define SPDIF_PREAMBLE_Z (0x17) // Block start & Sub-frame 1
+#define SPDIF_PREAMBLE_X (0x47) // Sub-frame 1
+#define SPDIF_PREAMBLE_Y (0x27) // Sub-frame 2
 
 // This encodes 16 input data bits into 32 biphase mark bits.
 // 16 input bits must be in the LS 16 bits of the 32 bit input.
@@ -59,6 +57,36 @@ static inline unsigned biphase_encode(unsigned data_in)
     unsigned residual = 0x0000FFFF;
     crcn(residual, 0, poly, 16);
     return zip(residual >> 1, ~residual, 0);
+}
+
+// Takes the least significant 16 bits of inword, maps each input bit to 6 output bits to produce three 32 bit words which are output to the port.
+#pragma unsafe arrays
+static inline void zip_out_6(out buffered port:32 p, unsigned inword)
+{
+    unsigned outword[3] = {0}; // Initialise our 3 output words to zero.
+    for(int i=0; i<16; i++) // Loop over LS 16 bits
+    {
+        unsigned out_shift_cnt = i*6; // Tracking where we want to be in chunks of 6 bits
+        unsigned out_shift_cnt_mod = out_shift_cnt % 32;
+        unsigned out_shift_cnt_div = out_shift_cnt >> 5; // equiv to /32
+        unsigned mask = 1 << i; // Create a single bit mask at the input bit we want to process
+        if ((inword & mask) != 0) // Input bit is 1
+        {
+            outword[out_shift_cnt_div] |= (0x3F << out_shift_cnt_mod); // Set the 6 output bits at the correct position
+            // Two special cases where the 6 output bits will cross a 32 bit word boundary.
+            // Manually set the LS bits that cross over into the next output word.
+            if (i == 5)
+                outword[1] |= 0xF;
+            else if (i == 10)
+                outword[2] |= 0x3;
+        }
+        // Output words to port as soon as they are ready
+        if (i == 5)
+            p <: outword[0];
+        else if (i == 10)
+            p <: outword[1];
+    }
+    p <: outword[2];
 }
 
 static inline void output_word(out buffered port:32 p, unsigned encoded_word, int divide)
@@ -90,14 +118,20 @@ static inline void output_word(out buffered port:32 p, unsigned encoded_word, in
             p <: (unsigned int) final;
             p <: (unsigned int) (final >> 32);
             break;
+        case 6:
+            /* E.g. 24.576MHz -> 32kHz */
+            zip_out_6(p,  encoded_word       ); // Output LS 16 bits as 3*32bit words
+            zip_out_6(p, (encoded_word >> 16)); // Output MS 16 bits as 3*32bit words
+            break;
         default:
-            /* Mclk does not support required sample freq */
+            /* Mclk does not support required sample freq - unreachable due to previous error checks */
+             __builtin_unreachable();
             break;
     }
 }
 
 #pragma unsafe arrays
-static inline void subframe_tx(out buffered port:32 p, unsigned sample_in, int ctrl, int preamble_type, int divide)
+static inline void subframe_tx(out buffered port:32 p, unsigned sample_in, int ctrl, unsigned char encoded_preamble, int divide)
 {
     static int lastbit = 0;
     unsigned word, sample, control, parity;
@@ -106,34 +140,31 @@ static inline void subframe_tx(out buffered port:32 p, unsigned sample_in, int c
     parity = parity32(sample | control | VALIDITY) << 31;
     word = sample | control | parity | VALIDITY;
 
-    /* Preamble */
-    unsigned char encoded_preamble = preamble[preamble_type];
-
-    if(lastbit == 1) 
+    if(lastbit == 1)
     {
         encoded_preamble ^= 0xFF;  // invert all bits of the encoded preamble
     }
     // Don't need to update lastbit here as due to pattern of preamble bits it is never changed.
-    
+
     word = word >> 4; // We've finished with the preamble
-    
+
     /* Next 12 bits of subframe word */
     unsigned encoded_word = biphase_encode(word & 0xFFF);
-    if(lastbit == 1) 
+    if(lastbit == 1)
     {
         encoded_word = ~encoded_word;  // invert all bits of the encoded word
     }
     encoded_word = (encoded_word << 8) | encoded_preamble;
-    
+
     // Now we do need to update lastbit to see if the last bit we're sending was 1 or 0.
     lastbit = encoded_word >> 31;
     output_word(p, encoded_word, divide);
-    
+
     word = word >> 12; // Shift the word down the 12 bits we've just output.
-    
+
     /* Remaining 16 bits of subframe word (we've shifted right by 4 and then 12 so only bottom 16 still remaining) */
     encoded_word = biphase_encode(word);
-    if(lastbit == 1) 
+    if(lastbit == 1)
     {
         encoded_word = ~encoded_word;  // invert all bits of the encoded word
     }
@@ -167,19 +198,19 @@ void SpdifTransmit(out buffered port:32 p, chanend c_tx0, const int ctrl_left[2]
         for(int i = 0 ; i < 192; i++)
         {
             /* Sub-frame 1 */
-            if(i == 0) 
+            if(i == 0)
             {
-                subframe_tx(p, sample_l, controlLeft, 0, divide);  // Block start & Sub-frame 1
+                subframe_tx(p, sample_l, controlLeft, SPDIF_PREAMBLE_Z, divide);  // Block start & Sub-frame 1
             }
-            else 
+            else
             {
-                subframe_tx(p, sample_l, controlLeft, 1, divide); // Sub-frame 1
+                subframe_tx(p, sample_l, controlLeft, SPDIF_PREAMBLE_X, divide); // Sub-frame 1
             }
 
             controlLeft >>=1;
 
             /* Sub-frame 2 */
-            subframe_tx(p, sample_r, controlRight, 2, divide);
+            subframe_tx(p, sample_r, controlRight, SPDIF_PREAMBLE_Y, divide);
 
             controlRight >>=1;
 
@@ -194,7 +225,7 @@ void SpdifTransmit(out buffered port:32 p, chanend c_tx0, const int ctrl_left[2]
             sample_l = inuint(c_tx0);
             sample_r = inuint(c_tx0);
 
-            if(i == 31) 
+            if(i == 31)
             {
                 controlLeft = ctrl_left[1];
                 controlRight = ctrl_right[1];
@@ -223,6 +254,7 @@ void SpdifTransmitError(chanend c_in)
 #define CHAN_STAT_L        (0x00107A04)
 #define CHAN_STAT_R        (0x00207A04)
 
+#define CHAN_STAT_32000    (0x03000000)
 #define CHAN_STAT_44100    (0x00000000)
 #define CHAN_STAT_48000    (0x02000000)
 #define CHAN_STAT_88200    (0x08000000)
@@ -236,10 +268,19 @@ void SpdifTransmitError(chanend c_in)
 void spdif_tx(buffered out port:32 p, chanend c_in)
 {
     chkct(c_in, XS1_CT_END);
-    while (1)
+    while(1)
     {
         int chanStat_L[2], chanStat_R[2];
         unsigned divide;
+        unsigned error = 0;
+
+        /* Check for shutdown */
+        if (testct(c_in))
+        {
+            chkct(c_in, XS1_CT_END);
+            return;
+        }
+
         /* Receive sample frequency over channel (in Hz) */
         unsigned  samFreq = inuint(c_in);
 
@@ -249,6 +290,11 @@ void spdif_tx(buffered out port:32 p, chanend c_in)
         /* Create channel status words based on sample freq */
         switch(samFreq)
         {
+            case 32000:
+                chanStat_L[0] = CHAN_STAT_L | CHAN_STAT_32000;
+                chanStat_R[0] = CHAN_STAT_R | CHAN_STAT_32000;
+                break;
+
             case 44100:
                 chanStat_L[0] = CHAN_STAT_L | CHAN_STAT_44100;
                 chanStat_R[0] = CHAN_STAT_R | CHAN_STAT_44100;
@@ -280,9 +326,7 @@ void spdif_tx(buffered out port:32 p, chanend c_in)
                 break;
 
             default:
-                /* Sample frequency not recognised.. carry on for now... */
-                chanStat_L[0] = CHAN_STAT_L;
-                chanStat_R[0] = CHAN_STAT_R;
+                error++;
                 break;
 
         }
@@ -292,7 +336,13 @@ void spdif_tx(buffered out port:32 p, chanend c_in)
         /* Calculate required divide */
         divide = mclkFreq / (samFreq * 2 * 32 * 2);
 
-        SpdifTransmit(p, c_in, chanStat_L, chanStat_R, divide);
+        if((divide != 1) && (divide != 2) && (divide != 4) && (divide != 6))
+            error++;
+
+        if(error)
+            SpdifTransmitError(c_in);
+        else
+            SpdifTransmit(p, c_in, chanStat_L, chanStat_R, divide);
     }
 }
 
@@ -318,4 +368,10 @@ void spdif_tx_reconfigure_sample_rate(chanend c,
     outct(c, XS1_CT_END);
     outuint(c, sample_frequency);
     outuint(c, master_clock_frequency);
+}
+
+void spdif_tx_shutdown(chanend c)
+{
+    outct(c, XS1_CT_END);
+    outct(c, XS1_CT_END);
 }
