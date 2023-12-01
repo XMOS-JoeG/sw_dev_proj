@@ -79,7 +79,7 @@ void spdif_rx_analyse(void)
         printf("Input port reference: 0x%X on tile[%d]\n", portref, TILE);
     }
     
-    float core_clock_ns = 1000/CORE_CLOCK_MHZ;
+    float core_clock_ns = 1000.0/CORE_CLOCK_MHZ;
     
     unsigned sample_rate_MHz = CORE_CLOCK_MHZ/(CLK_DIVIDE*2);
     float sample_time_ns = (core_clock_ns * 2 * CLK_DIVIDE);
@@ -219,6 +219,18 @@ void spdif_rx_analyse(void)
             max_count = hist_count;
         }
         hist_count = 0;
+    }
+
+    if (min_pulse < 2)
+    {
+        printf("Minimum pulse length too short for analysis. QUIT.\n");
+        exit(1);
+    }
+      
+    if (max_pulse/min_pulse > 20)
+    {
+        printf("Ratio of max to min pulse length too high for S/PDIF stream. QUIT.\n");
+        exit(1);
     }
     
     //printf("histogram: max_count = %d, max_pulse = %d, min pulse = %d\n", max_count, max_pulse, min_pulse);
@@ -630,7 +642,8 @@ void spdif_rx_analyse(void)
     float min_tie = 0;
     float max_tie = 0;
     
-    unsigned sample_time_ns_int = 4;
+    unsigned sample_time_ns_int;
+    sample_time_ns_int = (unsigned) sample_time_ns;
 
     printf("Analysing time interval error of zero crossings.\n");
     for(int i=i_start; i<(i_start+500); i++)
