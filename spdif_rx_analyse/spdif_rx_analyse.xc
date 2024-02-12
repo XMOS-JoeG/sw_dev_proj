@@ -188,14 +188,14 @@ void spdif_rx_analyse(void)
     }
     
     // Build a histogram of pulse lengths
-    // Max pulse length for 44.1 is 3UI ~=532ns. @ 2.5ns fastest sampling this is 213. So use array of size 256.
-    unsigned pulse_histogram[256] = {0}; // count of how many pulses occurred for each pulse length. Pulse length is index into this array.
+    // Max pulse length for 32kHz is 3UI ~=736ns. @ 2.5ns fastest sampling this is 294. So use array of size 512.
+    unsigned pulse_histogram[512] = {0}; // count of how many pulses occurred for each pulse length. Pulse length is index into this array.
 
     unsigned hist_count = 0;
     unsigned min_pulse = 1000; // Minimum pulse length found
     unsigned max_pulse = 0; // Maximum pulse length found
     unsigned max_count = 0; // Maximum count of pulses in any bin
-    for(int j=0; j<256; j++)
+    for(int j=0; j<512; j++)
     {
         for(int i=0; i<pulse_count; i++)
         {
@@ -351,12 +351,12 @@ void spdif_rx_analyse(void)
     
     // Find the sample rate.
     // We are collecting 20000 32 bit samples @ 4ns per bit. total time = 4ns * 32 * 20000 = 2.56ms.
-    // @ 44.1kHz (slowest), subframe/preamble rate is @ 88.2kHz => T = 11.34us.
-    // So in 2.56ms we have (2560/11.34) = 225 preambles.
+    // @ 32kHz (slowest), subframe/preamble rate is @ 64kHz => T = 15.63us.
+    // So in 2.56ms we have (2560/15.63) = 163 preambles.
     // Look for preambles. All start with a long pulse, then disregard the next say eight pulses (some may be long)
     // So look for a long pulse, wait for eight pulses to make sure we're in the middle of a word. Then look for long pulse, make this time t0. ignore next eight pulses and look for long again.
     // A subframe might be 4 + (28*2) = 60 pulses long if transmitting all 1s.
-    // Lets measure the time for 200 subframes, this could be 60*200 = 12000 pulses.
+    // Lets measure the time for 150 subframes, this could be 60*150 = 9000 pulses.
     unsigned first_long = 0;
     unsigned pre_count = 0;
     unsigned i_start, i_end;
@@ -375,7 +375,7 @@ void spdif_rx_analyse(void)
             }
             else
             {
-                if (pre_count == 200)
+                if (pre_count == 150)
                 {
                     i_end = i;
                     break;
@@ -391,21 +391,21 @@ void spdif_rx_analyse(void)
     }
     
     // Sum up all the pulse times to get the total time
-    unsigned t_pre200 = 0;
+    unsigned t_pre150 = 0;
     for(int i=i_start; i<i_end; i++)
     {
-        t_pre200 = t_pre200 + pulse_lengths[i];
+        t_pre150 = t_pre150 + pulse_lengths[i];
     }
     
     float time_1ui_fl;
     float calc_sample_rate_khz;
     
-    //printf("t_pre200 = %d\n", t_pre200);
+    //printf("t_pre150 = %d\n", t_pre150);
     
-    // 200 preambles means 200 subframes so (200*64UI per subframe) = 12800UI
-    // Total time is t_pre200 * sample time
-    // So final is (t_pre200 * sample time)/12800
-    time_1ui_fl = (float) (t_pre200*sample_time_ns)/12800;
+    // 150 preambles means 150 subframes so (150*64UI per subframe) = 9600UI
+    // Total time is t_pre150 * sample time
+    // So final is (t_pre150 * sample time)/9600
+    time_1ui_fl = (float) (t_pre150*sample_time_ns)/9600;
     calc_sample_rate_khz = 1000000/(time_1ui_fl*128);
     
     //printf("i_start = %d, i_end = %d, time_1ui_fl = %fns, calc_sample_rate = %.3fkHz\n", i_start, i_end, time_1ui_fl, calc_sample_rate_khz);
